@@ -271,6 +271,15 @@ defmodule Adbc.Connection.Test do
     end
   end
 
+  describe "types" do
+    test "datetime", %{db: db} do
+      conn = start_supervised!({Connection, database: db})
+      {:ok, datetime, 0} = DateTime.from_iso8601("2015-01-23T23:50:07.123456Z")
+      assert %Adbc.Result{data: %{"result" => ["2015-01-23 23:51:07"]}} =
+               Connection.query!(conn, "SELECT datetime(?, '+1 minute', 'localtime') as result", [datetime])
+    end
+  end
+
   describe "lock" do
     test "serializes access", %{db: db} do
       conn = start_supervised!({Connection, database: db})
