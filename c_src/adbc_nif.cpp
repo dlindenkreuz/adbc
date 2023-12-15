@@ -1352,6 +1352,117 @@ int elixir_to_arrow_type_struct(ErlNifEnv *env, ERL_NIF_TERM values, struct Arro
                 snprintf(error_out->message, sizeof(error_out->message), "failed to get atom");
                 return 1;
             }
+        } else if (enif_is_map(env, head)) {
+            // datetime
+            ERL_NIF_TERM struct_term;
+            std::string struct_val;
+            if (enif_get_map_value(env, head, erlang::nif::atom(env, "__struct__"), &struct_term)
+                && erlang::nif::get_atom(env, struct_term, struct_val)) {
+                bool is_datetime = struct_val == "Elixir.NaiveDateTime" || struct_val == "Elixir.DateTime";
+                if (!is_datetime) {
+                    snprintf(error_out->message, sizeof(error_out->message), "struct type not supported yet.");
+                    return 1;
+                }
+
+                ERL_NIF_TERM val;
+                std::tm tm{};
+                ErlNifSInt64 int_value;
+                std::vector<int64_t> usec_value;
+                std::string str_value;
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "calendar"), &val) && erlang::nif::get_atom(env, val, str_value)) {
+                    if (str_value != "Elixir.Calendar.ISO") {
+                        snprintf(error_out->message, sizeof(error_out->message), "only ISO calendar type is currently supported.");
+                        return 1;
+                    }
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "year"), &val) && erlang::nif::get(env, val, &int_value)) {
+                    tm.tm_year = int_value - 1900;
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "month"), &val) && erlang::nif::get(env, val, &int_value)) {
+                    tm.tm_mon = int_value - 1;
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "day"), &val) && erlang::nif::get(env, val, &int_value)) {
+                    tm.tm_mday = int_value;
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "hour"), &val) && erlang::nif::get(env, val, &int_value)) {
+                    tm.tm_hour = int_value;
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "minute"), &val) && erlang::nif::get(env, val, &int_value)) {
+                    tm.tm_min = int_value;
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "second"), &val) && erlang::nif::get(env, val, &int_value)) {
+                    tm.tm_sec = int_value;
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                if (enif_get_map_value(env, head, erlang::nif::atom(env, "microsecond"), &val) && erlang::nif::get_tuple(env, val, usec_value)) {
+                    // noop, will add later
+                } else {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value.");
+                    return 1;
+                }
+
+                static auto precision = NANOARROW_TIME_UNIT_MICRO;
+
+                if (struct_val == "Elixir.DateTime") {
+                    std::string time_zone;
+                    if (enif_get_map_value(env, head, erlang::nif::atom(env, "time_zone"), &val) && erlang::nif::get(env, val, time_zone)) {
+                        NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(schema_i, NANOARROW_TYPE_TIMESTAMP, precision, time_zone.c_str()));
+                    } else {
+                        snprintf(error_out->message, sizeof(error_out->message), "internal error: could not read map value time zone.");
+                        return 1;
+                    }
+                } else if (struct_val == "Elixir.NaiveDateTime") {
+                    NANOARROW_RETURN_NOT_OK(ArrowSchemaSetTypeDateTime(schema_i, NANOARROW_TYPE_TIME64, precision, NULL));
+                }
+
+                std::time_t time = std::mktime(&tm);
+                if (time == -1 || usec_value[0] > 999999) {
+                    snprintf(error_out->message, sizeof(error_out->message), "internal error: could not convert time.");
+                    return 1;
+                }
+
+                // convert to microseconds
+                auto i64_time = static_cast<int64_t>(time) * 1000000;
+                if (usec_value[1] > 0) {
+                    i64_time += usec_value[0];
+                }
+
+                NANOARROW_RETURN_NOT_OK(ArrowSchemaSetName(schema_i, ""));
+                NANOARROW_RETURN_NOT_OK(ArrowArrayInitFromSchema(child_i, schema_i, error_out));
+                NANOARROW_RETURN_NOT_OK(ArrowArrayStartAppending(child_i));
+                NANOARROW_RETURN_NOT_OK(ArrowArrayAppendInt(child_i, i64_time));
+            } else {
+                snprintf(error_out->message, sizeof(error_out->message), "map type not supported yet.");
+                return 1;
+            }
         } else {
             snprintf(error_out->message, sizeof(error_out->message), "type not supported yet.");
             return 1;
